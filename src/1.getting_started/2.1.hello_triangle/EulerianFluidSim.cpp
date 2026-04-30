@@ -1,6 +1,8 @@
+#define GLFW_EXPOSE_NATIVE_WIN32
+#define GLFW_EXPOSE_NATIVE_WGL
+
 #include <glad/glad.h>   // 1. GLAD always first
 #include <GLFW/glfw3.h>  // 2. GLFW second
-#include <GLFW/glfw3native.h> // 3. Native headers (now safe because of global defines)
 
 // 4. Standard Libraries
 #include <iostream>
