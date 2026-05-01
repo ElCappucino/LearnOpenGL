@@ -1,3 +1,6 @@
+#define GLFW_EXPOSE_NATIVE_WIN32
+#define GLFW_EXPOSE_NATIVE_WGL
+
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 
@@ -15,6 +18,13 @@
 #include <execution>
 #include <algorithm>
 
+#include "imgui/imgui.h"
+#include "imgui/imgui_impl_glfw.h"
+#include "imgui/imgui_impl_opengl3.h"
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image_write.h>
+
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
@@ -23,6 +33,11 @@ void processInput(GLFWwindow *window);
 const int CANVAS_RES = 200;
 const float FLOOR_SIZE = 20.0f;
 bool canvas[CANVAS_RES][CANVAS_RES] = { false };
+
+float brushColor[3] = { 0.0f, 0.4f, 0.9f }; // Default Blue
+float brushSize = 1.0f;
+float fluidViscosity = 0.2f;
+float fluidDiffusion = 0.0001f;
 
 struct Particle {
     glm::vec3 position;
@@ -39,10 +54,10 @@ struct Spring {
 };
 
 struct FluidGrid {
-    float density[CANVAS_RES][CANVAS_RES];
+    glm::vec3 density[CANVAS_RES][CANVAS_RES];
     glm::vec2 velocity[CANVAS_RES][CANVAS_RES];
     // For Eulerian, we usually need "previous" states for stable calculation
-    float density_prev[CANVAS_RES][CANVAS_RES];
+    glm::vec3 density_prev[CANVAS_RES][CANVAS_RES];
     glm::vec2 velocity_prev[CANVAS_RES][CANVAS_RES];
 };
 FluidGrid paintFluid;
@@ -57,8 +72,8 @@ public:
     }
 
     void step(FluidGrid& grid, float dt) {
-        float visco = 0.2f; // Viscosity: how thick the liquid is
-        float diff = 0.0000f;  // Diffusion: how fast the paint spreads
+        float visco = fluidViscosity; // Viscosity: how thick the liquid is
+        float diff = fluidDiffusion;  // Diffusion: how fast the paint spreads
 
         // 1. Velocity Step
         // Add forces (if any), diffuse velocity, then ensure incompressibility
@@ -78,20 +93,21 @@ public:
 private:
     int indices[CANVAS_RES];
     // Solve linear equations (Gauss-Seidel) for diffusion and projection
-    void lin_solve(float x[CANVAS_RES][CANVAS_RES], float x0[CANVAS_RES][CANVAS_RES], float a, float c) {
+    void lin_solve_vec3(glm::vec3 x[CANVAS_RES][CANVAS_RES], glm::vec3 x0[CANVAS_RES][CANVAS_RES], float a, float c) {
         for (int k = 0; k < 20; k++) {
-            // Iterate over rows in parallel
             std::for_each(std::execution::par_unseq, &indices[1], &indices[CANVAS_RES - 1], [&](int i) {
                 for (int j = 1; j < CANVAS_RES - 1; j++) {
+                    // Vector math handles R, G, and B simultaneously
                     x[i][j] = (x0[i][j] + a * (x[i - 1][j] + x[i + 1][j] + x[i][j - 1] + x[i][j + 1])) / c;
                 }
                 });
         }
     }
 
-    void diffuseDensity(float x[CANVAS_RES][CANVAS_RES], float x0[CANVAS_RES][CANVAS_RES], float diff, float dt) {
+    void diffuseDensity(glm::vec3 x[CANVAS_RES][CANVAS_RES], glm::vec3 x0[CANVAS_RES][CANVAS_RES], float diff, float dt) {
         float a = dt * diff * (CANVAS_RES - 2) * (CANVAS_RES - 2);
-        lin_solve(x, x0, a, 1 + 4 * a);
+        // Overload lin_solve or manually solve per channel
+        lin_solve_vec3(x, x0, a, 1 + 4 * a);
     }
 
     void diffuse2D(glm::vec2 x[CANVAS_RES][CANVAS_RES], glm::vec2 x0[CANVAS_RES][CANVAS_RES], float diff, float dt) {
@@ -107,7 +123,7 @@ private:
         }
     }
 
-    void advectDensity(float d[CANVAS_RES][CANVAS_RES], float d0[CANVAS_RES][CANVAS_RES], glm::vec2 v[CANVAS_RES][CANVAS_RES], float dt) {
+    void advectDensity(glm::vec3 d[CANVAS_RES][CANVAS_RES], glm::vec3 d0[CANVAS_RES][CANVAS_RES], glm::vec2 v[CANVAS_RES][CANVAS_RES], float dt) {
         float dt0 = dt * (CANVAS_RES - 2);
         for (int i = 1; i < CANVAS_RES - 1; i++) {
             for (int j = 1; j < CANVAS_RES - 1; j++) {
@@ -119,9 +135,10 @@ private:
                 if (y < 0.5f) y = 0.5f; if (y > CANVAS_RES - 1.5f) y = CANVAS_RES - 1.5f;
                 int j0 = (int)y; int j1 = j0 + 1;
 
-                float s1 = x - i0; float s0 = 1 - s1;
-                float t1 = y - j0; float t0 = 1 - t1;
+                float s1 = x - i0; float s0 = 1.0f - s1;
+                float t1 = y - j0; float t0 = 1.0f - t1;
 
+                // Linearly interpolate the RGB color vectors
                 d[i][j] = s0 * (t0 * d0[i0][j0] + t1 * d0[i0][j1]) +
                     s1 * (t0 * d0[i1][j0] + t1 * d0[i1][j1]);
             }
@@ -151,11 +168,13 @@ private:
     }
 
     void project(glm::vec2 v[CANVAS_RES][CANVAS_RES], glm::vec2 p_div[CANVAS_RES][CANVAS_RES]) {
-        // Reuse p_div to store divergence (x) and pressure (y)
+        float h = 1.0f / CANVAS_RES; // Grid spacing
+
         for (int i = 1; i < CANVAS_RES - 1; i++) {
             for (int j = 1; j < CANVAS_RES - 1; j++) {
-                p_div[i][j].x = -0.5f * (v[i + 1][j].x - v[i - 1][j].x + v[i][j + 1].y - v[i][j - 1].y) / CANVAS_RES;
-                p_div[i][j].y = 0;
+                // Correct Divergence formula (notice we use h, not RES)
+                p_div[i][j].x = -0.5f * h * (v[i + 1][j].x - v[i - 1][j].x + v[i][j + 1].y - v[i][j - 1].y);
+                p_div[i][j].y = 0; // Initial guess for pressure
             }
         }
 
@@ -163,16 +182,18 @@ private:
         for (int k = 0; k < 20; k++) {
             for (int i = 1; i < CANVAS_RES - 1; i++) {
                 for (int j = 1; j < CANVAS_RES - 1; j++) {
-                    p_div[i][j].y = (p_div[i][j].x + p_div[i - 1][j].y + p_div[i + 1][j].y + p_div[i][j - 1].y + p_div[i][j + 1].y) / 4;
+                    p_div[i][j].y = (p_div[i][j].x + p_div[i - 1][j].y + p_div[i + 1][j].y +
+                        p_div[i][j - 1].y + p_div[i][j + 1].y) / 4.0f;
                 }
             }
         }
 
-        // Subtract pressure gradient from velocity
+        // Subtract pressure gradient
         for (int i = 1; i < CANVAS_RES - 1; i++) {
             for (int j = 1; j < CANVAS_RES - 1; j++) {
-                v[i][j].x -= 0.5f * (p_div[i + 1][j].y - p_div[i - 1][j].y) * CANVAS_RES;
-                v[i][j].y -= 0.5f * (p_div[i][j + 1].y - p_div[i][j - 1].y) * CANVAS_RES;
+                // Scale velocity update by 1/h
+                v[i][j].x -= 0.5f * (p_div[i + 1][j].y - p_div[i - 1][j].y) / h;
+                v[i][j].y -= 0.5f * (p_div[i][j + 1].y - p_div[i][j - 1].y) / h;
             }
         }
     }
@@ -194,8 +215,6 @@ bool firstMouse = true;
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 
-
-
 // Buffer for rendering the points
 unsigned int paintVAO, paintVBO;
 std::vector<glm::vec3> paintPositions;
@@ -203,6 +222,10 @@ std::vector<glm::vec3> paintPositions;
 std::vector<Particle> particles;
 std::vector<Spring> springs;
 
+void addDensity(int x, int y, glm::vec3 color, float amount) {
+    // Only update the specific cells under the brush
+    paintFluid.density[x][y] += color * amount;
+}
 glm::vec3 getMouseWorldPos(GLFWwindow* window, glm::mat4 projection, glm::mat4 view) {
     double xpos, ypos;
     glfwGetCursorPos(window, &xpos, &ypos);
@@ -324,6 +347,39 @@ void initTetrahedralBrush(float scale, glm::vec3 offset) {
     }
 }
 
+void resetCanvas(FluidGrid& grid) {
+    memset(grid.density, 0, sizeof(grid.density));
+    memset(grid.density_prev, 0, sizeof(grid.density_prev));
+    memset(grid.velocity, 0, sizeof(grid.velocity));
+    memset(grid.velocity_prev, 0, sizeof(grid.velocity_prev));
+}
+
+void saveCanvas(FluidGrid& grid) {
+    unsigned char* pixels = new unsigned char[CANVAS_RES * CANVAS_RES * 3];
+
+    for (int y = 0; y < CANVAS_RES; y++) {
+        for (int x = 0; x < CANVAS_RES; x++) {
+            auto color = grid.density[x][y];
+
+            // 180-degree rotation logic:
+            // Invert the x and y indices used for the output buffer
+            int invX = (CANVAS_RES - 1) - x;
+            int invY = (CANVAS_RES - 1) - y;
+
+            // Calculate the index using the inverted coordinates
+            int idx = (invY * CANVAS_RES + invX) * 3;
+
+            pixels[idx + 0] = (unsigned char)(std::min(color.r, 1.0f) * 255);
+            pixels[idx + 1] = (unsigned char)(std::min(color.g, 1.0f) * 255);
+            pixels[idx + 2] = (unsigned char)(std::min(color.b, 1.0f) * 255);
+        }
+    }
+
+    stbi_write_png("canvas_output.png", CANVAS_RES, CANVAS_RES, 3, pixels, CANVAS_RES * 3);
+
+    delete[] pixels;
+}
+
 int main()
 {
     // glfw: initialize and configure
@@ -427,7 +483,7 @@ int main()
     glBindTexture(GL_TEXTURE_2D, fluidTexture);
 
     // Use GL_RED or GL_LUMINANCE since density is a single float
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, CANVAS_RES, CANVAS_RES, 0, GL_RED, GL_FLOAT, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, CANVAS_RES, CANVAS_RES, 0, GL_RGB, GL_FLOAT, NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -462,6 +518,15 @@ int main()
     // draw in wireframe
     //glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
     FluidSolver fluidSolver;
+
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    ImGui::StyleColorsDark();
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplOpenGL3_Init("#version 330");
+
     // render loop
     // -----------
     while (!glfwWindowShouldClose(window))
@@ -566,7 +631,10 @@ int main()
                         int cz = (int)((particles[i].position.z + FLOOR_SIZE) * invFloorRange * CANVAS_RES);
 
                         if (cx >= 0 && cx < CANVAS_RES && cz >= 0 && cz < CANVAS_RES) {
-                            paintFluid.density[cx][cz] += 0.1f;
+                            // Multiply the 'amount' by the brushColor to store the actual RGB data
+                            glm::vec3 colorToApply = glm::make_vec3(brushColor) * 0.1f * brushSize;
+                            paintFluid.density[cx][cz] += colorToApply;
+
                             paintFluid.velocity[cx][cz] += glm::vec2(particles[i].velocity.x, particles[i].velocity.z);
                         }
                     }
@@ -622,7 +690,14 @@ int main()
         
        // 1. Upload the fresh density data from CPU to GPU
         glBindTexture(GL_TEXTURE_2D, fluidTexture);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, CANVAS_RES, CANVAS_RES, GL_RED, GL_FLOAT, paintFluid.density);
+        glTexSubImage2D(
+            GL_TEXTURE_2D,
+            0, 0, 0,
+            CANVAS_RES, CANVAS_RES,
+            GL_RGB,        // Change from GL_RED
+            GL_FLOAT,      // Data type
+            paintFluid.density
+        );
 
         // 2. Now draw with the shader
         paintShader.use();
@@ -630,6 +705,7 @@ int main()
         paintShader.setMat4("view", view);
         paintShader.setMat4("model", glm::mat4(1.0f));
         paintShader.setInt("fluidTexture", 0);
+        paintShader.setVec3("inkColor", glm::make_vec3(brushColor));
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, fluidTexture);
@@ -644,6 +720,41 @@ int main()
         glBindBuffer(GL_ARRAY_BUFFER, lineVBO);
         glBufferSubData(GL_ARRAY_BUFFER, 0, lineVertices.size() * sizeof(float), lineVertices.data());
         glDrawArrays(GL_LINES, 0, (GLsizei)(lineVertices.size() / 3));
+
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(550, 0), ImGuiCond_Once);
+        ImGui::SetNextWindowSize(ImVec2(250, 300), ImGuiCond_Once);
+
+        ImGui::Begin("aint Controls");
+        ImGui::Text("Brush Settings");
+        ImGui::ColorEdit3("Brush Color", brushColor);
+        ImGui::SliderFloat("Brush Size", &brushSize, 0.1f, 5.0f);
+        
+        ImGui::Separator();
+
+        // 2. Fluidity Controls
+        ImGui::Text("Fluid Dynamics");
+        if (ImGui::SliderFloat("Viscosity", &fluidViscosity, 0.0f, 1.0f)) {
+            // You'll need to update your solver or make these variables public/global
+        }
+        ImGui::SliderFloat("Diffusion", &fluidDiffusion, 0.0f, 0.01f, "%.4f");
+
+        if (ImGui::Button("Reset Canvas", ImVec2(120, 0))) {
+            resetCanvas(paintFluid);
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Save Image", ImVec2(120, 0))) {
+            saveCanvas(paintFluid);
+        }
+
+        ImGui::End();
+
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(window);
         glfwPollEvents();
