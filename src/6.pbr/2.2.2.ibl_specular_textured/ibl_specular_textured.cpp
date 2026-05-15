@@ -499,23 +499,23 @@ int main()
         pbrShader.setMat3("normalMatrix", glm::transpose(glm::inverse(glm::mat3(model))));
         renderSphere();
 
-        // render light source (simply re-render sphere at light positions)
-        // this looks a bit off as we use the same shader, but it'll make their positions obvious and 
-        // keeps the codeprint small.
-        for (unsigned int i = 0; i < sizeof(lightPositions) / sizeof(lightPositions[0]); ++i)
-        {
-            glm::vec3 newPos = lightPositions[i] + glm::vec3(sin(glfwGetTime() * 5.0) * 5.0, 0.0, 0.0);
-            newPos = lightPositions[i];
-            pbrShader.setVec3("lightPositions[" + std::to_string(i) + "]", newPos);
-            pbrShader.setVec3("lightColors[" + std::to_string(i) + "]", lightColors[i]);
+        //// render light source (simply re-render sphere at light positions)
+        //// this looks a bit off as we use the same shader, but it'll make their positions obvious and 
+        //// keeps the codeprint small.
+        //for (unsigned int i = 0; i < sizeof(lightPositions) / sizeof(lightPositions[0]); ++i)
+        //{
+        //    glm::vec3 newPos = lightPositions[i] + glm::vec3(sin(glfwGetTime() * 5.0) * 5.0, 0.0, 0.0);
+        //    newPos = lightPositions[i];
+        //    pbrShader.setVec3("lightPositions[" + std::to_string(i) + "]", newPos);
+        //    pbrShader.setVec3("lightColors[" + std::to_string(i) + "]", lightColors[i]);
 
-            model = glm::mat4(1.0f);
-            model = glm::translate(model, newPos);
-            model = glm::scale(model, glm::vec3(0.5f));
-            pbrShader.setMat4("model", model);
-            pbrShader.setMat3("normalMatrix", glm::transpose(glm::inverse(glm::mat3(model))));
-            renderSphere();
-        }
+        //    model = glm::mat4(1.0f);
+        //    model = glm::translate(model, newPos);
+        //    model = glm::scale(model, glm::vec3(0.5f));
+        //    pbrShader.setMat4("model", model);
+        //    pbrShader.setMat3("normalMatrix", glm::transpose(glm::inverse(glm::mat3(model))));
+        //    renderSphere();
+        //}
 
         // render skybox (render as last to prevent overdraw)
         backgroundShader.use();
