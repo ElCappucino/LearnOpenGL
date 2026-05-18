@@ -22,6 +22,7 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
 void processInput(GLFWwindow *window);
 unsigned int loadHDRTexture(const char* path);
 void renderCube();
+void renderQuad();
 
 // settings
 const unsigned int SCR_WIDTH = 800;
@@ -41,9 +42,13 @@ float lastFrame = 0.0f;
 glm::vec3 charPosition = glm::vec3(0.0f, 0.0f, 0.0f);
 glm::vec3 charFront = glm::vec3(0.0f, 0.0f, -1.0f); // initial forward
 glm::vec3 charFrontTarget = glm::vec3(0.0f, 0.0f, -1.0f); // initial forward
+
+bool hasMovementInput = false;
 float charSpeed = 2.5f;
 bool isMoving = false;
 bool lastMouseDown = false;
+
+bool movementLocked = false;
 
 enum AnimState {
     IDLE = 1,
@@ -65,6 +70,9 @@ float targetPitch = orbitPitch;
 
 unsigned int cubeVAO = 0;
 unsigned int cubeVBO = 0;
+
+unsigned int quadVAO = 0;
+unsigned int quadVBO = 0;
 
 int main()
 {
@@ -117,6 +125,7 @@ int main()
     Shader equirectangularToCubemapShader("cubemap.vs", "equirectangular_to_cubemap.fs");
     Shader skyboxShader("skybox.vs", "skybox.fs");
     Shader animShader("anim_model.vs", "anim_model.fs");
+    Shader fireShader("fire.vs", "fire.fs");
 
     // load models
     // -----------
@@ -209,6 +218,7 @@ int main()
     // -----------
     while (!glfwWindowShouldClose(window))
     {
+        printf("movementLocked = %d\n", movementLocked);
         // per-frame time logic
         // --------------------
         float currentFrame = static_cast<float>(glfwGetTime());
@@ -219,9 +229,10 @@ int main()
         // -----
         processInput(window);
 
+        // --- Locate this state machine block inside your main loop ---
         switch (charState) {
         case IDLE:
-            if (isMoving) { // Reads the global flag
+            if (isMoving) {
                 animator.CrossFade(&runAnimation, 0.2f);
                 charState = IDLE_RUN;
             }
@@ -232,7 +243,7 @@ int main()
             }
             break;
         case RUN:
-            if (!isMoving) { // Reads the global flag
+            if (!isMoving) {
                 animator.CrossFade(&idleAnimation, 0.2f);
                 charState = RUN_IDLE;
             }
@@ -242,19 +253,24 @@ int main()
                 charState = IDLE;
             }
             break;
+
         case IDLE_SLASH:
+            // FIX: Only trigger the crossfade once. Do not let input logic evaluate 
+            // flags until animator successfully switches tracks.
             printf("IDLE_SLASH\n");
-            animator.CrossFade(&slashAnimation, 0.4f);
+            animator.CrossFade(&slashAnimation, 0.2f); // Swapped to 0.2f for snappier entry
             charState = SLASHING;
             break;
 
         case SLASHING:
+            // FIX: Enforce absolute isolation. The slash animation MUST complete 
+            // its timeline loop before we poll any movement flags.
             if (animator.AnimationFinished())
             {
                 if (isMoving)
-                    animator.CrossFade(&runAnimation, 0.1f);
+                    animator.CrossFade(&runAnimation, 0.2f);
                 else
-                    animator.CrossFade(&idleAnimation, 0.1f);
+                    animator.CrossFade(&idleAnimation, 0.2f);
 
                 charState = SLASH_IDLE;
             }
@@ -263,6 +279,7 @@ int main()
         case SLASH_IDLE:
             if (!animator.IsBlending()) {
                 charState = isMoving ? RUN : IDLE;
+                movementLocked = false;
             }
             break;
         }
@@ -373,6 +390,46 @@ int main()
 
         glDepthFunc(GL_LESS); // Reset back to default standard depth testing
 
+        // ==========================================
+        // 4. RENDER PROCEDURAL FIRE (CROSSED X-BILLBOARD)
+        // ==========================================
+        glEnable(GL_BLEND);
+
+        glBlendFunc(GL_ONE, GL_ONE);
+
+        glDepthMask(GL_FALSE);
+
+        fireShader.use();
+        fireShader.setMat4("projection", projection);
+        fireShader.setMat4("view", view);
+        fireShader.setFloat("time", static_cast<float>(glfwGetTime()));
+
+        glm::vec3 firePos = glm::vec3(5.5f, 0.9f, -1.0f); 
+        glm::vec3 fireScale = glm::vec3(2.0f, 2.0f, 1.0f);
+
+        // Define fixed angles for an intersecting 'X' pattern (0 and 90 degrees)
+        // Tip: You can add a third angle (e.g., 45.0f) for an even denser "*" shape!
+        float angles[] = { 0.0f, 45.0f, 90.0f, 135.0f };
+
+        for (int i = 0; i < 4; ++i)
+        {
+            glm::mat4 modelCrossed = glm::mat4(1.0f);
+            modelCrossed = glm::translate(modelCrossed, firePos);
+            modelCrossed = glm::rotate(modelCrossed, glm::radians(angles[i]), glm::vec3(0.0f, 1.0f, 0.0f));
+            modelCrossed = glm::scale(modelCrossed, fireScale);
+
+            fireShader.setMat4("model", modelCrossed);
+
+            // Send a unique phase offset variable to the shader for each plane
+            fireShader.setFloat("planeOffset", static_cast<float>(i) * 15.5f);
+
+            renderQuad();
+        }
+        glDepthMask(GL_TRUE);
+
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDisable(GL_BLEND);
+
         // Swap buffers and poll
         glfwSwapBuffers(window);
         glfwPollEvents();
@@ -399,45 +456,42 @@ void processInput(GLFWwindow* window)
     glm::vec3 camRightXZ = glm::normalize(glm::cross(camForwardXZ, glm::vec3(0.0f, 1.0f, 0.0f)));
     glm::vec3 moveDir(0.0f);
 
+    // 1. Handle Slash Input Trigger
     bool mouseDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-
     if (mouseDown && !lastMouseDown)
     {
         if (charState == IDLE || charState == RUN)
         {
             charState = IDLE_SLASH;
+            movementLocked = true;
         }
     }
-
     lastMouseDown = mouseDown;
 
-    bool movementLocked =
-        (charState == IDLE_SLASH ||
-            charState == SLASHING ||
-            charState == SLASH_IDLE);
+    // Check if player is currently locked in an attack animation
+    //movementLocked = (charState == IDLE_SLASH || charState == SLASHING || charState == SLASH_IDLE);
 
-    
+    // 2. Gather Movement Input
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) moveDir += camForwardXZ;
     if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) moveDir -= camForwardXZ;
     if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) moveDir -= camRightXZ;
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) moveDir += camRightXZ;
 
-    printf("glm::length(moveDir) = %f\n", glm::length(moveDir));
+    // 3. Process Movement State Safely
     if (glm::length(moveDir) > 0.0f)
     {
-        // Prevent movement during attack states
         if (movementLocked)
         {
+            // Force movement flags off completely while locked
             isMoving = false;
-            return;
         }
-
-        moveDir = glm::normalize(moveDir);
-
-        charPosition += moveDir * charSpeed * deltaTime;
-        charFrontTarget = moveDir;
-
-        isMoving = true;
+        else
+        {
+            moveDir = glm::normalize(moveDir);
+            charPosition += moveDir * charSpeed * deltaTime;
+            charFrontTarget = moveDir;
+            isMoving = true;
+        }
     }
     else
     {
@@ -560,5 +614,29 @@ void renderCube()
     }
     glBindVertexArray(cubeVAO);
     glDrawArrays(GL_TRIANGLES, 0, 36);
+    glBindVertexArray(0);
+}
+
+void renderQuad() {
+    if (quadVAO == 0) {
+        float quadVertices[] = {
+            // Positions        // Texture Coords
+            -0.5f,  0.5f, 0.0f,  0.0f, 1.0f,
+            -0.5f, -0.5f, 0.0f,  0.0f, 0.0f,
+             0.5f,  0.5f, 0.0f,  1.0f, 1.0f,
+             0.5f, -0.5f, 0.0f,  1.0f, 0.0f,
+        };
+        glGenVertexArrays(1, &quadVAO);
+        glGenBuffers(1, &quadVBO);
+        glBindVertexArray(quadVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(quadVertices), &quadVertices, GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+    }
+    glBindVertexArray(quadVAO);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     glBindVertexArray(0);
 }

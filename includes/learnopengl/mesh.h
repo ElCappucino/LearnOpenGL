@@ -92,6 +92,10 @@ public:
         glActiveTexture(GL_TEXTURE0);
     }
 
+    unsigned int GetVAO() const { return VAO; }
+    unsigned int GetVBO() const { return VBO; }
+    unsigned int GetEBO() const { return EBO; }
+
 private:
     // render data 
     unsigned int VBO, EBO;
