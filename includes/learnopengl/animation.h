@@ -20,6 +20,8 @@ struct AssimpNodeData
 class Animation
 {
 public:
+	glm::mat4 m_GlobalInverseTransform;
+
 	Animation() = default;
 
 	Animation(const std::string& animationPath, Model* model)
@@ -30,8 +32,10 @@ public:
 		auto animation = scene->mAnimations[0];
 		m_Duration = animation->mDuration;
 		m_TicksPerSecond = animation->mTicksPerSecond;
-		aiMatrix4x4 globalTransformation = scene->mRootNode->mTransformation;
-		globalTransformation = globalTransformation.Inverse();
+		aiMatrix4x4 globalTransform = scene->mRootNode->mTransformation;
+		globalTransform = globalTransform.Inverse();
+
+		m_GlobalInverseTransform = AssimpGLMHelpers::ConvertMatrixToGLMFormat(globalTransform);
 		ReadHierarchyData(m_RootNode, scene->mRootNode);
 		ReadMissingBones(animation, *model);
 	}
@@ -60,31 +64,39 @@ public:
 	{ 
 		return m_BoneInfoMap;
 	}
-
+	inline glm::mat4 GetGlobalInverseTransform() const
+	{
+		return m_GlobalInverseTransform;
+	}
 private:
+	
+
 	void ReadMissingBones(const aiAnimation* animation, Model& model)
 	{
 		int size = animation->mNumChannels;
 
-		auto& boneInfoMap = model.GetBoneInfoMap();//getting m_BoneInfoMap from Model class
-		int& boneCount = model.GetBoneCount(); //getting the m_BoneCounter from Model class
+		// Grab a direct reference to the reference model layout
+		auto& modelBoneInfoMap = model.GetBoneInfoMap();
 
-		//reading channels(bones engaged in an animation and their keyframes)
 		for (int i = 0; i < size; i++)
 		{
 			auto channel = animation->mChannels[i];
 			std::string boneName = channel->mNodeName.data;
 
-			if (boneInfoMap.find(boneName) == boneInfoMap.end())
+			// Verify the channel exists in our actual rendering mesh skeleton
+			if (modelBoneInfoMap.find(boneName) != modelBoneInfoMap.end())
 			{
-				boneInfoMap[boneName].id = boneCount;
-				boneCount++;
+				m_Bones.push_back(Bone(boneName, modelBoneInfoMap.at(boneName).id, channel));
 			}
-			m_Bones.push_back(Bone(channel->mNodeName.data,
-				boneInfoMap[channel->mNodeName.data].id, channel));
+			else
+			{
+				// Debug track if your animation has dummy/null bones not found on your skeletal mesh
+				std::cout << "Animation track bone " << boneName << " not utilized by base model rig layout.\n";
+			}
 		}
 
-		m_BoneInfoMap = boneInfoMap;
+		// Keep your animation's bone dictionary perfectly unified with your base model
+		m_BoneInfoMap = modelBoneInfoMap;
 	}
 
 	void ReadHierarchyData(AssimpNodeData& dest, const aiNode* src)

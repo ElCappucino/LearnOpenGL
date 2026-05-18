@@ -1,0 +1,46 @@
+# Blender 5.0.1 MTL File: 'None'
+# www.blender.org
+
+newmtl Tunnel01
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd Tunnel01_BaseColor.1001.jpg
+map_Ns Tunnel01_Roughness.1001.jpg
+map_Bump -bm 1.000000 Tunnel01_Normal.1001.jpg
+
+newmtl Tunnel02
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd Tunnel02_BaseColor.1001.jpg
+map_Ns Tunnel02_Roughness.1001.jpg
+map_Bump -bm 1.000000 Tunnel02_Normal.1001.jpg
+
+newmtl Tunnel03
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd Tunnel03_BaseColor.1001.jpg
+map_Ns Tunnel03_Roughness.1001.jpg
+map_Bump -bm 1.000000 Tunnel03_Normal.1001.jpg
+
+newmtl Tunnel04
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd Tunnel04_BaseColor.1001.jpg
+map_Ns Tunnel04_Roughness.1001.jpg
+map_Bump -bm 1.000000 Tunnel04_Normal.1001.jpg
